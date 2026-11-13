@@ -1,5 +1,7 @@
 esphome:
   name: c3-hebrew-hub
+  includes:
+    - espnow_compat.h
   on_boot:
     priority: 600
     then:
@@ -10,17 +12,20 @@ esp32:
   framework:
     type: arduino
 
+# 1. רשת Wi-Fi עצמאית בערוץ 1 (מסונכרנת ל-ESP-NOW)
 wifi:
   ap:
     ssid: "ESP32-C3-Hebrew"
     password: "12345678"
     channel: 1
 
+# 2. עדכוני גרסה אלחוטיים (OTA) + כפתור העלאת קובץ .bin באתר האינטרנט
 ota:
   - platform: esphome
     password: "admin"
   - platform: web_server
 
+# 3. אתר אינטרנט מובנה על הבקר (192.168.4.1)
 web_server:
   port: 80
   version: 2
@@ -33,7 +38,7 @@ font:
   - file: "gfonts://Rubik"
     id: font_heb
     size: 11
-    glyphs: ' 0123456789-.:!?,()/"''dBmאבגדהוזחטיכלמנסעפצקרשתךםןףץ'
+    glyphs: ' 0123456789-.:!?,()/"''ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzאבגדהוזחטיכלמנסעפצקרשתךםןףץ'
   - file: "gfonts://Rubik"
     id: font_big
     size: 16
@@ -91,6 +96,7 @@ script:
       - lambda: 'id(morse_str) = "";'
       - component.update: oled_display
 
+# תיבת הקלדת טקסט חופשי בעברית באתר האינטרנט
 text:
   - platform: template
     name: "כתוב הודעה בעברית לכל המסכים"
@@ -114,6 +120,7 @@ text:
             - script.execute: blink_notify
             - component.update: oled_display
 
+# כפתורי שליטה בעברית באתר האינטרנט
 button:
   - platform: template
     name: "החלף תצוגה במסך (הודעות / רדאר / טיימר / מורס)"
@@ -163,6 +170,7 @@ button:
             return std::vector<uint8_t>(pkt.begin(), pkt.end());
       - component.update: oled_display
 
+# כפתור BOOT הפיזי על הלוח (GPIO 9)
 binary_sensor:
   - platform: gpio
     pin:
@@ -171,6 +179,7 @@ binary_sensor:
       inverted: true
     name: "כפתור פיזי על הלוח"
     on_multi_click:
+      # לחיצה כפולה: מעבר בין 4 המצבים
       - timing:
           - ON for at most 350ms
           - OFF for at most 250ms
@@ -181,6 +190,7 @@ binary_sensor:
               id(blue_led).turn_off();
           - component.update: oled_display
 
+      # לחיצה קצרה: פעולה במצב הנוכחי
       - timing:
           - ON for at most 350ms
           - OFF for at least 260ms
@@ -227,6 +237,7 @@ binary_sensor:
                 - script.execute: blink_notify
           - component.update: oled_display
 
+      # לחיצה ארוכה: איפוס טיימר או שידור קו במורס
       - timing:
           - ON for at least 500ms
         then:
@@ -283,13 +294,13 @@ espnow:
   on_receive:
     then:
       - lambda: |-
-          std::string raw(info.data.begin(), info.data.end());
+          std::string raw = espnow_extract_str(info, 0);
           if (raw.rfind("TXT:", 0) == 0) {
             id(app_mode) = 0;
             id(screen_text) = raw.substr(4);
             id(blink_notify).execute();
           } else if (raw == "BCN") {
-            id(last_rssi) = info.rssi;
+            id(last_rssi) = espnow_extract_rssi(info, 0);
             if (id(app_mode) == 1 && id(last_rssi) > -50) id(blue_led).turn_on();
             else if (id(app_mode) == 1) id(blue_led).turn_off();
           } else if (raw.rfind("TMR:", 0) == 0) {
