@@ -10,21 +10,17 @@ esp32:
   framework:
     type: arduino
 
-# 1. רשת Wi-Fi עצמאית בערוץ 1 (מסונכרנת ל-ESP-NOW)
 wifi:
   ap:
     ssid: "ESP32-C3-Hebrew"
     password: "12345678"
     channel: 1
-    ap_timeout: 0s
 
-# 2. עדכוני גרסה אלחוטיים (OTA) + כפתור העלאת קובץ .bin באתר האינטרנט
 ota:
   - platform: esphome
     password: "admin"
   - platform: web_server
 
-# 3. אתר אינטרנט מובנה על הבקר (192.168.4.1)
 web_server:
   port: 80
   version: 2
@@ -81,11 +77,12 @@ script:
     mode: restart
     then:
       - repeat:
-          count: 6
+          count: 3
           then:
-            - output.toggle: blue_led
+            - output.turn_on: blue_led
             - delay: 200ms
-      - output.turn_off: blue_led
+            - output.turn_off: blue_led
+            - delay: 200ms
 
   - id: clear_morse
     mode: restart
@@ -94,7 +91,6 @@ script:
       - lambda: 'id(morse_str) = "";'
       - component.update: oled_display
 
-# תיבת הקלדת טקסט חופשי בעברית באתר האינטרנט
 text:
   - platform: template
     name: "כתוב הודעה בעברית לכל המסכים"
@@ -118,7 +114,6 @@ text:
             - script.execute: blink_notify
             - component.update: oled_display
 
-# כפתורי שליטה בעברית באתר האינטרנט
 button:
   - platform: template
     name: "החלף תצוגה במסך (הודעות / רדאר / טיימר / מורס)"
@@ -168,7 +163,6 @@ button:
             return std::vector<uint8_t>(pkt.begin(), pkt.end());
       - component.update: oled_display
 
-# כפתור BOOT הפיזי על הלוח (GPIO 9)
 binary_sensor:
   - platform: gpio
     pin:
@@ -177,7 +171,6 @@ binary_sensor:
       inverted: true
     name: "כפתור פיזי על הלוח"
     on_multi_click:
-      # לחיצה כפולה: מעבר בין 4 המצבים
       - timing:
           - ON for at most 350ms
           - OFF for at most 250ms
@@ -188,7 +181,6 @@ binary_sensor:
               id(blue_led).turn_off();
           - component.update: oled_display
 
-      # לחיצה קצרה: פעולה במצב הנוכחי
       - timing:
           - ON for at most 350ms
           - OFF for at least 260ms
@@ -235,7 +227,6 @@ binary_sensor:
                 - script.execute: blink_notify
           - component.update: oled_display
 
-      # לחיצה ארוכה: איפוס טיימר או שידור קו במורס
       - timing:
           - ON for at least 500ms
         then:
