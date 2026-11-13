@@ -1,0 +1,16 @@
+name: Build ESPHome Firmware
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: esphome/build-action@v1
+        with:
+          yaml_file: c3-hebrew-web.yaml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-ready
+          path: .esphome/build/c3-hebrew-hub/.pioenvs/c3-hebrew-hub/firmware.factory.bin
