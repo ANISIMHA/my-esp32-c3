@@ -1,0 +1,338 @@
+esphome:
+  name: c3-hebrew-hub
+  on_boot:
+    priority: 600
+    then:
+      - component.update: oled_display
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+# 1. רשת Wi-Fi עצמאית בערוץ 1 (מסונכרנת ל-ESP-NOW)
+wifi:
+  ap:
+    ssid: "ESP32-C3-Hebrew"
+    password: "12345678"
+    channel: 1
+    ap_timeout: 0s
+
+# 2. עדכוני גרסה אלחוטיים (OTA)
+ota:
+  - platform: esphome
+    password: "admin"
+
+# 3. אתר אינטרנט מובנה עם כפתור עדכון גרסה בתחתית
+web_server:
+  port: 80
+  version: 2
+  ota: true
+
+i2c:
+  sda: GPIO5
+  scl: GPIO6
+
+font:
+  - file: "gfonts://Rubik"
+    id: font_heb
+    size: 11
+    glyphs: ' 0123456789-.:!?,()/"''dBmאבגדהוזחטיכלמנסעפצקרשתךםןףץ'
+  - file: "gfonts://Rubik"
+    id: font_big
+    size: 16
+    glyphs: '0123456789:.-'
+
+globals:
+  # מצבים: 0=הודעות/סטטוס, 1=רדאר קרבה, 2=טיימר מסונכרן, 3=מורס חי
+  - id: app_mode
+    type: int
+    initial_value: '0'
+  - id: door_idx
+    type: int
+    initial_value: '0'
+  - id: screen_text
+    type: std::string
+    initial_value: '"מוכן להודעות"'
+  - id: beacon_tx
+    type: bool
+    initial_value: 'true'
+  - id: last_rssi
+    type: int
+    initial_value: '-100'
+  - id: timer_sec
+    type: int
+    initial_value: '0'
+  - id: timer_run
+    type: bool
+    initial_value: 'false'
+  - id: morse_str
+    type: std::string
+    initial_value: '""'
+
+output:
+  - platform: gpio
+    pin:
+      number: GPIO8
+      inverted: true
+    id: blue_led
+
+script:
+  - id: blink_notify
+    mode: restart
+    then:
+      - repeat:
+          count: 6
+          then:
+            - output.toggle: blue_led
+            - delay: 200ms
+      - output.turn_off: blue_led
+
+  - id: clear_morse
+    mode: restart
+    then:
+      - delay: 3s
+      - lambda: 'id(morse_str) = "";'
+      - component.update: oled_display
+
+# ==========================================================
+# תיבת הקלדת טקסט חופשי בעברית באתר האינטרנט (משדר לכל המסכים!)
+# ==========================================================
+text:
+  - platform: template
+    name: "כתוב הודעה בעברית לכל המסכים"
+    id: web_custom_msg
+    mode: text
+    optimistic: true
+    max_length: 24
+    set_action:
+      - lambda: |-
+          if (!x.empty()) {
+            id(app_mode) = 0;
+            id(screen_text) = x;
+            std::string pkt = "TXT:" + x;
+            id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+            id(blink_notify).execute();
+          }
+      - component.update: oled_display
+
+# ==========================================================
+# כפתורי שליטה בעברית באתר האינטרנט
+# ==========================================================
+button:
+  - platform: template
+    name: "החלף תצוגה במסך (הודעות / רדאר / טיימר / מורס)"
+    on_press:
+      - lambda: 'id(app_mode) = (id(app_mode) + 1) % 4;'
+      - component.update: oled_display
+
+  - platform: template
+    name: "שלח התראה מהירה: דופקים בדלת!"
+    on_press:
+      - lambda: |-
+          id(app_mode) = 0;
+          id(screen_text) = "דופקים בדלת!";
+          std::string pkt = "TXT:דופקים בדלת!";
+          id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+          id(blink_notify).execute();
+      - component.update: oled_display
+
+  - platform: template
+    name: "הפעל טיימר 5 דקות בכל הבקרים"
+    on_press:
+      - lambda: |-
+          id(app_mode) = 2;
+          id(timer_sec) = 300;
+          id(timer_run) = true;
+          std::string pkt = "TMR:300";
+          id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+      - component.update: oled_display
+
+  - platform: template
+    name: "אפס טיימר בכל הבקרים"
+    on_press:
+      - lambda: |-
+          id(app_mode) = 2;
+          id(timer_sec) = 0;
+          id(timer_run) = false;
+          std::string pkt = "TMR:0";
+          id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+      - component.update: oled_display
+
+# ==========================================================
+# כפתור BOOT הפיזי על הלוח (GPIO 9)
+# ==========================================================
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO9
+      mode: { input: true, pullup: true }
+      inverted: true
+    name: "כפתור פיזי על הלוח"
+    on_multi_click:
+      # לחיצה כפולה: מעבר בין 4 המצבים
+      - timing:
+          - ON for at most 350ms
+          - OFF for at most 250ms
+          - ON for at most 350ms
+        then:
+          - lambda: |-
+              id(app_mode) = (id(app_mode) + 1) % 4;
+              id(blue_led).turn_off();
+          - component.update: oled_display
+
+      # לחיצה קצרה: פעולה במצב הנוכחי
+      - timing:
+          - ON for at most 350ms
+          - OFF for at least 260ms
+        then:
+          - lambda: |-
+              if (id(app_mode) == 0) {
+                const char* st[] = {"פנוי", "בשיחה", "רגע...", "דופקים בדלת!"};
+                id(door_idx) = (id(door_idx) + 1) % 4;
+                id(screen_text) = st[id(door_idx)];
+                std::string pkt = "TXT:" + id(screen_text);
+                id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+              } else if (id(app_mode) == 1) {
+                id(beacon_tx) = !id(beacon_tx);
+              } else if (id(app_mode) == 2) {
+                id(timer_sec) = 300;
+                id(timer_run) = true;
+                std::string pkt = "TMR:300";
+                id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+              } else if (id(app_mode) == 3) {
+                std::string pkt = "MRS:.";
+                id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+                id(blink_notify).execute();
+              }
+          - component.update: oled_display
+
+      # לחיצה ארוכה: איפוס טיימר או שידור קו במורס
+      - timing:
+          - ON for at least 500ms
+        then:
+          - lambda: |-
+              if (id(app_mode) == 2) {
+                id(timer_sec) = 0;
+                id(timer_run) = false;
+                std::string pkt = "TMR:0";
+                id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+              } else if (id(app_mode) == 3) {
+                std::string pkt = "MRS:-";
+                id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+                id(blink_notify).execute();
+              }
+          - component.update: oled_display
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (id(app_mode) == 1 && id(beacon_tx)) {
+            std::string pkt = "BCN";
+            id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+          }
+          if (id(timer_run) && id(timer_sec) > 0) {
+            id(timer_sec) -= 1;
+            if (id(timer_sec) == 0) {
+              id(timer_run) = false;
+              id(blink_notify).execute();
+            }
+            if (id(app_mode) == 2) id(oled_display).update();
+          }
+
+# קליטת הודעות מכל הבקרים והצגה מיידית בעברית
+espnow:
+  id: espnow_net
+  channel: 1
+  peers:
+    - "FF:FF:FF:FF:FF:FF"
+  on_receive:
+    then:
+      - lambda: |-
+          std::string raw(reinterpret_cast<const char*>(info.data), info.len);
+          if (raw.rfind("TXT:", 0) == 0) {
+            id(app_mode) = 0;
+            id(screen_text) = raw.substr(4);
+            id(blink_notify).execute();
+          } else if (raw == "BCN") {
+            id(last_rssi) = info.rx_ctrl->rssi;
+            if (id(app_mode) == 1 && id(last_rssi) > -50) id(blue_led).turn_on();
+            else if (id(app_mode) == 1) id(blue_led).turn_off();
+          } else if (raw.rfind("TMR:", 0) == 0) {
+            id(app_mode) = 2;
+            int s = std::stoi(raw.substr(4));
+            id(timer_sec) = s;
+            id(timer_run) = (s > 0);
+          } else if (raw.rfind("MRS:", 0) == 0) {
+            id(app_mode) = 3;
+            if (id(morse_str).length() >= 8) id(morse_str) = "";
+            id(morse_str) += raw.substr(4);
+            id(blink_notify).execute();
+            id(clear_morse).execute();
+          }
+      - component.update: oled_display
+
+# ==========================================================
+# תצוגה על מסך ה-0.42" (תומכת בפיצול אוטומטי ל-2 שורות לעברית!)
+# ==========================================================
+display:
+  - platform: ssd1306_i2c
+    id: oled_display
+    model: "SSD1306 72x40"
+    address: 0x3C
+    lambda: |-
+      // פונקציית היפוך עברית חכמה שמשאירה מספרים בסדר תקין
+      auto format_heb = [](const std::string& s) -> std::string {
+        std::vector<std::string> tokens;
+        for (size_t i = 0; i < s.length(); ) {
+          if ((s[i] & 0xE0) == 0xC0) {
+            tokens.push_back(s.substr(i, 2));
+            i += 2;
+          } else if (isdigit(s[i])) {
+            std::string num;
+            while (i < s.length() && isdigit(s[i])) { num += s[i++]; }
+            tokens.push_back(num);
+          } else {
+            tokens.push_back(s.substr(i, 1));
+            i += 1;
+          }
+        }
+        std::string res;
+        for (auto it = tokens.rbegin(); it != tokens.rend(); ++it) res += *it;
+        return res;
+      };
+
+      const char* titles[] = {"1/4 הודעה", "2/4 רדאר", "3/4 טיימר", "4/4 מורס"};
+      it.print(71, 0, id(font_heb), TextAlign::TOP_RIGHT, format_heb(titles[id(app_mode)]).c_str());
+      it.line(0, 13, 71, 13);
+
+      if (id(app_mode) == 0) {
+        // פיצול חכם ל-2 שורות אם ההודעה ארוכה מ-10 תווים
+        std::vector<std::string> chars;
+        for (size_t i = 0; i < id(screen_text).length(); ) {
+          size_t l = ((id(screen_text)[i] & 0xE0) == 0xC0) ? 2 : 1;
+          chars.push_back(id(screen_text).substr(i, l));
+          i += l;
+        }
+        if (chars.size() <= 10) {
+          it.print(71, 20, id(font_heb), TextAlign::TOP_RIGHT, format_heb(id(screen_text)).c_str());
+        } else {
+          std::string line1, line2;
+          for (size_t i = 0; i < chars.size(); i++) {
+            if (i < 10) line1 += chars[i];
+            else line2 += chars[i];
+          }
+          it.print(71, 15, id(font_heb), TextAlign::TOP_RIGHT, format_heb(line1).c_str());
+          it.print(71, 27, id(font_heb), TextAlign::TOP_RIGHT, format_heb(line2).c_str());
+        }
+      } else if (id(app_mode) == 1) {
+        it.printf(0, 15, id(font_heb), "%d dBm", id(last_rssi));
+        int bar = constrain(map(id(last_rssi), -95, -35, 0, 70), 0, 70);
+        it.rectangle(0, 29, 72, 10);
+        if (bar > 0) it.filled_rectangle(1, 30, bar, 8);
+      } else if (id(app_mode) == 2) {
+        it.printf(36, 27, id(font_big), TextAlign::CENTER, "%02d:%02d", id(timer_sec)/60, id(timer_sec)%60);
+      } else if (id(app_mode) == 3) {
+        it.print(36, 27, id(font_big), TextAlign::CENTER, id(morse_str).c_str());
+      }
