@@ -18,16 +18,16 @@ wifi:
     channel: 1
     ap_timeout: 0s
 
-# 2. עדכוני גרסה אלחוטיים (OTA)
+# 2. עדכוני גרסה אלחוטיים (OTA) + כפתור העלאת קובץ .bin באתר האינטרנט
 ota:
   - platform: esphome
     password: "admin"
+  - platform: web_server
 
-# 3. אתר אינטרנט מובנה עם כפתור עדכון גרסה בתחתית
+# 3. אתר אינטרנט מובנה על הבקר (192.168.4.1)
 web_server:
   port: 80
   version: 2
-  ota: true
 
 i2c:
   sda: GPIO5
@@ -44,7 +44,6 @@ font:
     glyphs: '0123456789:.-'
 
 globals:
-  # מצבים: 0=הודעות/סטטוס, 1=רדאר קרבה, 2=טיימר מסונכרן, 3=מורס חי
   - id: app_mode
     type: int
     initial_value: '0'
@@ -95,9 +94,7 @@ script:
       - lambda: 'id(morse_str) = "";'
       - component.update: oled_display
 
-# ==========================================================
-# תיבת הקלדת טקסט חופשי בעברית באתר האינטרנט (משדר לכל המסכים!)
-# ==========================================================
+# תיבת הקלדת טקסט חופשי בעברית באתר האינטרנט
 text:
   - platform: template
     name: "כתוב הודעה בעברית לכל המסכים"
@@ -106,19 +103,22 @@ text:
     optimistic: true
     max_length: 24
     set_action:
-      - lambda: |-
-          if (!x.empty()) {
-            id(app_mode) = 0;
-            id(screen_text) = x;
-            std::string pkt = "TXT:" + x;
-            id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
-            id(blink_notify).execute();
-          }
-      - component.update: oled_display
+      - if:
+          condition:
+            lambda: 'return !x.empty();'
+          then:
+            - lambda: |-
+                id(app_mode) = 0;
+                id(screen_text) = x;
+            - espnow.send:
+                address: FF:FF:FF:FF:FF:FF
+                data: !lambda |-
+                  std::string pkt = "TXT:" + x;
+                  return std::vector<uint8_t>(pkt.begin(), pkt.end());
+            - script.execute: blink_notify
+            - component.update: oled_display
 
-# ==========================================================
 # כפתורי שליטה בעברית באתר האינטרנט
-# ==========================================================
 button:
   - platform: template
     name: "החלף תצוגה במסך (הודעות / רדאר / טיימר / מורס)"
@@ -132,9 +132,12 @@ button:
       - lambda: |-
           id(app_mode) = 0;
           id(screen_text) = "דופקים בדלת!";
-          std::string pkt = "TXT:דופקים בדלת!";
-          id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
-          id(blink_notify).execute();
+      - espnow.send:
+          address: FF:FF:FF:FF:FF:FF
+          data: !lambda |-
+            std::string pkt = "TXT:דופקים בדלת!";
+            return std::vector<uint8_t>(pkt.begin(), pkt.end());
+      - script.execute: blink_notify
       - component.update: oled_display
 
   - platform: template
@@ -144,8 +147,11 @@ button:
           id(app_mode) = 2;
           id(timer_sec) = 300;
           id(timer_run) = true;
-          std::string pkt = "TMR:300";
-          id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+      - espnow.send:
+          address: FF:FF:FF:FF:FF:FF
+          data: !lambda |-
+            std::string pkt = "TMR:300";
+            return std::vector<uint8_t>(pkt.begin(), pkt.end());
       - component.update: oled_display
 
   - platform: template
@@ -155,13 +161,14 @@ button:
           id(app_mode) = 2;
           id(timer_sec) = 0;
           id(timer_run) = false;
-          std::string pkt = "TMR:0";
-          id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
+      - espnow.send:
+          address: FF:FF:FF:FF:FF:FF
+          data: !lambda |-
+            std::string pkt = "TMR:0";
+            return std::vector<uint8_t>(pkt.begin(), pkt.end());
       - component.update: oled_display
 
-# ==========================================================
 # כפתור BOOT הפיזי על הלוח (GPIO 9)
-# ==========================================================
 binary_sensor:
   - platform: gpio
     pin:
@@ -186,52 +193,89 @@ binary_sensor:
           - ON for at most 350ms
           - OFF for at least 260ms
         then:
-          - lambda: |-
-              if (id(app_mode) == 0) {
-                const char* st[] = {"פנוי", "בשיחה", "רגע...", "דופקים בדלת!"};
-                id(door_idx) = (id(door_idx) + 1) % 4;
-                id(screen_text) = st[id(door_idx)];
-                std::string pkt = "TXT:" + id(screen_text);
-                id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
-              } else if (id(app_mode) == 1) {
-                id(beacon_tx) = !id(beacon_tx);
-              } else if (id(app_mode) == 2) {
-                id(timer_sec) = 300;
-                id(timer_run) = true;
-                std::string pkt = "TMR:300";
-                id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
-              } else if (id(app_mode) == 3) {
-                std::string pkt = "MRS:.";
-                id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
-                id(blink_notify).execute();
-              }
+          - if:
+              condition:
+                lambda: 'return id(app_mode) == 0;'
+              then:
+                - lambda: |-
+                    const char* st[] = {"פנוי", "בשיחה", "רגע...", "דופקים בדלת!"};
+                    id(door_idx) = (id(door_idx) + 1) % 4;
+                    id(screen_text) = st[id(door_idx)];
+                - espnow.send:
+                    address: FF:FF:FF:FF:FF:FF
+                    data: !lambda |-
+                      std::string pkt = "TXT:" + id(screen_text);
+                      return std::vector<uint8_t>(pkt.begin(), pkt.end());
+          - if:
+              condition:
+                lambda: 'return id(app_mode) == 1;'
+              then:
+                - lambda: 'id(beacon_tx) = !id(beacon_tx);'
+          - if:
+              condition:
+                lambda: 'return id(app_mode) == 2;'
+              then:
+                - lambda: |-
+                    id(timer_sec) = 300;
+                    id(timer_run) = true;
+                - espnow.send:
+                    address: FF:FF:FF:FF:FF:FF
+                    data: !lambda |-
+                      std::string pkt = "TMR:300";
+                      return std::vector<uint8_t>(pkt.begin(), pkt.end());
+          - if:
+              condition:
+                lambda: 'return id(app_mode) == 3;'
+              then:
+                - espnow.send:
+                    address: FF:FF:FF:FF:FF:FF
+                    data: !lambda |-
+                      std::string pkt = "MRS:.";
+                      return std::vector<uint8_t>(pkt.begin(), pkt.end());
+                - script.execute: blink_notify
           - component.update: oled_display
 
       # לחיצה ארוכה: איפוס טיימר או שידור קו במורס
       - timing:
           - ON for at least 500ms
         then:
-          - lambda: |-
-              if (id(app_mode) == 2) {
-                id(timer_sec) = 0;
-                id(timer_run) = false;
-                std::string pkt = "TMR:0";
-                id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
-              } else if (id(app_mode) == 3) {
-                std::string pkt = "MRS:-";
-                id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
-                id(blink_notify).execute();
-              }
+          - if:
+              condition:
+                lambda: 'return id(app_mode) == 2;'
+              then:
+                - lambda: |-
+                    id(timer_sec) = 0;
+                    id(timer_run) = false;
+                - espnow.send:
+                    address: FF:FF:FF:FF:FF:FF
+                    data: !lambda |-
+                      std::string pkt = "TMR:0";
+                      return std::vector<uint8_t>(pkt.begin(), pkt.end());
+          - if:
+              condition:
+                lambda: 'return id(app_mode) == 3;'
+              then:
+                - espnow.send:
+                    address: FF:FF:FF:FF:FF:FF
+                    data: !lambda |-
+                      std::string pkt = "MRS:-";
+                      return std::vector<uint8_t>(pkt.begin(), pkt.end());
+                - script.execute: blink_notify
           - component.update: oled_display
 
 interval:
   - interval: 1s
     then:
+      - if:
+          condition:
+            lambda: 'return id(app_mode) == 1 && id(beacon_tx);'
+          then:
+            - espnow.send:
+                address: FF:FF:FF:FF:FF:FF
+                data: !lambda |-
+                  std::string pkt = "BCN";
+                  return std::vector<uint8_t>(pkt.begin(), pkt.end());
       - lambda: |-
-          if (id(app_mode) == 1 && id(beacon_tx)) {
-            std::string pkt = "BCN";
-            id(espnow_net)->send("FF:FF:FF:FF:FF:FF", reinterpret_cast<const uint8_t*>(pkt.c_str()), pkt.length());
-          }
           if (id(timer_run) && id(timer_sec) > 0) {
             id(timer_sec) -= 1;
             if (id(timer_sec) == 0) {
@@ -241,27 +285,25 @@ interval:
             if (id(app_mode) == 2) id(oled_display).update();
           }
 
-# קליטת הודעות מכל הבקרים והצגה מיידית בעברית
 espnow:
-  id: espnow_net
   channel: 1
   peers:
-    - "FF:FF:FF:FF:FF:FF"
+    - FF:FF:FF:FF:FF:FF
   on_receive:
     then:
       - lambda: |-
-          std::string raw(reinterpret_cast<const char*>(info.data), info.len);
+          std::string raw(info.data.begin(), info.data.end());
           if (raw.rfind("TXT:", 0) == 0) {
             id(app_mode) = 0;
             id(screen_text) = raw.substr(4);
             id(blink_notify).execute();
           } else if (raw == "BCN") {
-            id(last_rssi) = info.rx_ctrl->rssi;
+            id(last_rssi) = info.rssi;
             if (id(app_mode) == 1 && id(last_rssi) > -50) id(blue_led).turn_on();
             else if (id(app_mode) == 1) id(blue_led).turn_off();
           } else if (raw.rfind("TMR:", 0) == 0) {
             id(app_mode) = 2;
-            int s = std::stoi(raw.substr(4));
+            int s = atoi(raw.substr(4).c_str());
             id(timer_sec) = s;
             id(timer_run) = (s > 0);
           } else if (raw.rfind("MRS:", 0) == 0) {
@@ -273,16 +315,12 @@ espnow:
           }
       - component.update: oled_display
 
-# ==========================================================
-# תצוגה על מסך ה-0.42" (תומכת בפיצול אוטומטי ל-2 שורות לעברית!)
-# ==========================================================
 display:
   - platform: ssd1306_i2c
     id: oled_display
     model: "SSD1306 72x40"
     address: 0x3C
     lambda: |-
-      // פונקציית היפוך עברית חכמה שמשאירה מספרים בסדר תקין
       auto format_heb = [](const std::string& s) -> std::string {
         std::vector<std::string> tokens;
         for (size_t i = 0; i < s.length(); ) {
@@ -308,7 +346,6 @@ display:
       it.line(0, 13, 71, 13);
 
       if (id(app_mode) == 0) {
-        // פיצול חכם ל-2 שורות אם ההודעה ארוכה מ-10 תווים
         std::vector<std::string> chars;
         for (size_t i = 0; i < id(screen_text).length(); ) {
           size_t l = ((id(screen_text)[i] & 0xE0) == 0xC0) ? 2 : 1;
